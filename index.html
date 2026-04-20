@@ -93,6 +93,20 @@ body{background:#0f0f1a;font-family:'Segoe UI',system-ui,Arial,sans-serif;overfl
 
 canvas{display:block;cursor:crosshair}
 
+/* PAUSE */
+#pause-btn{
+  display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);
+  z-index:20;padding:8px 22px;font-size:.85rem;font-weight:bold;
+  background:rgba(0,0,0,.75);color:#fff;border:1px solid rgba(230,57,70,.5);
+  border-radius:8px;cursor:pointer;letter-spacing:1px;backdrop-filter:blur(4px);
+}
+#pause-btn:hover{background:rgba(230,57,70,.3);}
+#pause-overlay{
+  display:none;position:fixed;inset:0;z-index:19;
+  background:rgba(0,0,0,.55);align-items:center;justify-content:center;
+}
+#pause-overlay h2{color:#fff;font-size:3rem;letter-spacing:6px;text-shadow:0 0 30px rgba(230,57,70,.6);}
+
 /* HUD */
 #hud{display:none;position:fixed;top:12px;left:12px;z-index:10}
 #hud .stat{
@@ -253,6 +267,10 @@ canvas{display:block;cursor:crosshair}
 <!-- GAME CANVAS -->
 <canvas id="game"></canvas>
 
+<!-- PAUSE -->
+<button id="pause-btn">⏸ PAUSE</button>
+<div id="pause-overlay"><h2>PAUZA</h2></div>
+
 <!-- HUD -->
 <div id="hud">
   <div class="stat" id="hud-health">❤️ 100</div>
@@ -317,7 +335,9 @@ const MAX_ITEMS = 55;
 const BOT_COUNT = 12;
 const RESPAWN_MS = 2500;
 const HEALTH_REGEN = 0.08;
-const HIT_DAMAGE = 40;
+const PLAYER_ATTACK_DAMAGE = 65;
+const BOT_VS_PLAYER_DAMAGE = 18;
+const BOT_VS_BOT_DAMAGE = 35;
 const CAMERA_LERP = 0.08;
 
 const OUTFITS = [
@@ -394,6 +414,7 @@ for (let i = 0; i < 80; i++) {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let playing = false;
+let paused = false;
 let entities = [];
 let items = [];
 let particles = [];
@@ -531,15 +552,41 @@ const VOICE_LINES = {
   taunt:     ['./assets/voice/taunt-1.mp3','./assets/voice/taunt-2.mp3','./assets/voice/taunt-3.mp3','./assets/voice/taunt-4.mp3','./assets/voice/taunt-5.mp3'],
 };
 
+// Pre-create audio elements per file for mobile unlock compatibility
+const voicePool = {};
+for (const [cat, files] of Object.entries(VOICE_LINES)) {
+  voicePool[cat] = files.map(src => {
+    const a = new Audio(src);
+    a.preload = 'none';
+    a.volume = 0.85;
+    return a;
+  });
+}
+
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  const ctx = getAudioCtx();
+  if (ctx.state === 'suspended') ctx.resume();
+  for (const els of Object.values(voicePool)) {
+    for (const el of els) {
+      el.play().then(() => { el.pause(); el.currentTime = 0; }).catch(() => {});
+    }
+  }
+}
+document.addEventListener('touchstart', unlockAudio, { once: true });
+document.addEventListener('mousedown', unlockAudio, { once: true });
+
 let currentVoice = null;
 function playVoice(category) {
-  const lines = VOICE_LINES[category];
-  if (!lines || !lines.length) return;
-  const src = lines[Math.floor(Math.random() * lines.length)];
-  if (currentVoice) { currentVoice.pause(); currentVoice.currentTime = 0; }
-  currentVoice = new Audio(src);
-  currentVoice.volume = 0.85;
-  currentVoice.play().catch(() => {});
+  const pool = voicePool[category];
+  if (!pool || !pool.length) return;
+  const el = pool[Math.floor(Math.random() * pool.length)];
+  if (currentVoice && currentVoice !== el) { currentVoice.pause(); currentVoice.currentTime = 0; }
+  el.currentTime = 0;
+  currentVoice = el;
+  el.play().catch(() => {});
 }
 
 const music = new Audio('./assets/maczeta-life-theme.mp3');
@@ -689,12 +736,32 @@ function startGame() {
   document.getElementById('leaderboard').style.display = 'block';
   document.getElementById('kill-feed').style.display = 'block';
   if (!isMobile) document.getElementById('controls-hint-hud').style.display = 'block';
+  document.getElementById('pause-btn').style.display = 'block';
   // Show bottom ad banner when playing
   // document.getElementById('ad-banner-bottom').style.display = 'block';
 }
 
 document.getElementById('join-btn').addEventListener('click', startGame);
 nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') startGame(); });
+
+// ========== PAUSE ==========
+const pauseBtn = document.getElementById('pause-btn');
+const pauseOverlay = document.getElementById('pause-overlay');
+
+function togglePause() {
+  if (!playing) return;
+  paused = !paused;
+  if (paused) {
+    music.pause();
+    pauseBtn.textContent = '▶ RESUME';
+    pauseOverlay.style.display = 'flex';
+  } else {
+    music.play().catch(() => {});
+    pauseBtn.textContent = '⏸ PAUSE';
+    pauseOverlay.style.display = 'none';
+  }
+}
+pauseBtn.addEventListener('click', togglePause);
 
 // ========== INPUT ==========
 addEventListener('keydown', e => {
@@ -703,6 +770,7 @@ addEventListener('keydown', e => {
     case 's': case 'arrowdown': keys.down = true; break;
     case 'a': case 'arrowleft': keys.left = true; break;
     case 'd': case 'arrowright': keys.right = true; break;
+    case 'p': case 'escape': togglePause(); break;
   }
 });
 addEventListener('keyup', e => {
@@ -871,7 +939,7 @@ function showKill(msg) {
 }
 
 function update(dt) {
-  if (!playing) return;
+  if (!playing || paused) return;
   const me = entities[0];
   gameTime += dt;
 
@@ -919,7 +987,8 @@ function update(dt) {
         while (ad > Math.PI) ad -= Math.PI * 2;
         while (ad < -Math.PI) ad += Math.PI * 2;
         if (Math.abs(ad) < MACHETE_ARC / 2) {
-          o.health -= HIT_DAMAGE;
+          const dmg = e === entities[0] ? PLAYER_ATTACK_DAMAGE : (o === entities[0] ? BOT_VS_PLAYER_DAMAGE : BOT_VS_BOT_DAMAGE);
+          o.health -= dmg;
           o.lastHit = gameTime;
           o.hitFlash = 8;
           if (e === me) e.attackHit = true;
