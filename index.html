@@ -258,8 +258,7 @@ canvas{display:block;cursor:crosshair}
   <div class="stat" id="hud-health">❤️ 100</div>
   <div class="stat" id="hud-score">🪙 0</div>
   <div class="stat" id="hud-kills">🔪 0</div>
-  <div class="stat" id="hud-combo" style="display:none;border-left-color:#f4a261">🔥 x1</div>
-  <div class="stat" id="hud-streak" style="display:none;border-left-color:#f4a261;transition:opacity 0.4s">🔥 x1</div>
+  <div class="stat" id="hud-streak" style="display:none;border-left-color:#f4a261;transition:opacity 0.4s"></div>
 </div>
 
 <!-- LEADERBOARD -->
@@ -406,8 +405,6 @@ let cameraTarget = { x:0, y:0 };
 let keys = { up:false, down:false, left:false, right:false };
 let mouseAngle = 0;
 let screenShake = 0;
-let comboCount = 0;
-let comboTimer = 0;
 let streakCount = 0;
 let streakTimer = 0;
 let streakSpeedUntil = 0;
@@ -593,7 +590,7 @@ function makeEntity(name, isBot) {
     vx: 0, vy: 0,
     score: 0, health: 100, kills: 0, alive: true,
     outfit: OUTFITS[Math.floor(Math.random() * OUTFITS.length)],
-    attacking: false, attackStart: 0, lastAttack: 0,
+    attacking: false, attackStart: 0, lastAttack: 0, attackHit: false,
     lastHit: 0, // for health regen delay
     hitFlash: 0,
     targetX: p.x, targetY: p.y, retargetAt: 0, aggroTarget: null,
@@ -675,7 +672,6 @@ function startGame() {
   items = []; itemId = 0;
   for (let i = 0; i < MAX_ITEMS; i++) spawnItem();
   particles = []; floatingTexts = [];
-  comboCount = 0; comboTimer = 0;
 
   entities.push(makeEntity(name, false));
   const shuffled = [...BOT_NAMES].sort(() => Math.random() - 0.5);
@@ -865,7 +861,6 @@ const deathScreen = document.getElementById('death-screen');
 const deathMsgEl = document.getElementById('death-msg');
 const comboDisplay = document.getElementById('combo-display');
 const comboText = comboDisplay.querySelector('.combo-text');
-const hudCombo = document.getElementById('hud-combo');
 const hudStreak = document.getElementById('hud-streak');
 
 function showKill(msg) {
@@ -915,6 +910,7 @@ function update(dt) {
 
     // Hit detection (first frame of attack)
     if (e.attacking && gameTime - e.attackStart < 20) {
+      e.attackHit = false;
       for (const o of entities) {
         if (o === e || !o.alive) continue;
         if (dist(e, o) > MACHETE_RANGE + PLAYER_R) continue;
@@ -926,6 +922,7 @@ function update(dt) {
           o.health -= HIT_DAMAGE;
           o.lastHit = gameTime;
           o.hitFlash = 8;
+          if (e === me) e.attackHit = true;
 
           // Blood splatter on hit — directional
           const hitAngle = Math.atan2(o.y - e.y, o.x - e.x);
@@ -998,7 +995,8 @@ function update(dt) {
               deathMsgEl.textContent = msg;
               playVoice('death');
               streakCount = 0; streakTimer = 0; streakSpeedUntil = 0;
-              hudStreak.style.display = 'none';
+              hudStreak.style.opacity = '0';
+              setTimeout(() => { hudStreak.style.display = 'none'; }, 400);
             }
 
             // Respawn
@@ -1012,8 +1010,6 @@ function update(dt) {
                 deadRef.score = Math.max(0, deadRef.score - 30);
                 if (isMe) {
                   deathScreen.style.display = 'none';
-                  comboCount = 0;
-                  hudCombo.style.display = 'none';
                 }
               });
             }, RESPAWN_MS);
@@ -1039,12 +1035,6 @@ function update(dt) {
     }
   }
 
-  // Combo timeout
-  if (comboTimer > 0 && gameTime > comboTimer) {
-    comboCount = 0; comboTimer = 0;
-    hudCombo.style.display = 'none';
-  }
-
   // Streak timeout
   if (streakCount > 0 && gameTime > streakTimer) {
     streakCount = 0;
@@ -1052,10 +1042,9 @@ function update(dt) {
     setTimeout(() => { hudStreak.style.display = 'none'; }, 400);
   }
 
-  // Miss voice: player attacked but hit no one this frame
-  if (me && me.alive && me.attacking && gameTime - me.attackStart < 20) {
-    const hitAny = entities.some(o => o !== me && o.alive && o.hitFlash > 6);
-    if (!hitAny && Math.random() < 0.25) playVoice('miss');
+  // Miss voice: player attacked but hit no one
+  if (me && me.alive && me.attacking && gameTime - me.attackStart < 20 && !me.attackHit) {
+    if (Math.random() < 0.4) playVoice('miss');
   }
 
   // Low health voice (throttled to once per 10s)
