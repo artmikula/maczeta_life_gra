@@ -567,12 +567,9 @@ let audioUnlocked = false;
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
-  const ctx = getAudioCtx();
-  if (ctx.state === 'suspended') ctx.resume();
+  getAudioCtx().resume();
   for (const els of Object.values(voicePool)) {
-    for (const el of els) {
-      el.play().then(() => { el.pause(); el.currentTime = 0; }).catch(() => {});
-    }
+    for (const el of els) el.load();
   }
 }
 document.addEventListener('touchstart', unlockAudio, { once: true });
