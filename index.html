@@ -887,8 +887,9 @@ function update(dt) {
     if (keys.left) dx -= 1; if (keys.right) dx += 1;
     if (dx || dy) {
       const len = Math.hypot(dx, dy);
-      const nx = me.x + (dx / len) * PLAYER_SPEED;
-      const ny = me.y + (dy / len) * PLAYER_SPEED;
+      const curSpeed = gameTime < streakSpeedUntil ? PLAYER_SPEED * 1.3 : PLAYER_SPEED;
+      const nx = me.x + (dx / len) * curSpeed;
+      const ny = me.y + (dy / len) * curSpeed;
       if (nx > PLAYER_R && nx < MAP_W - PLAYER_R && !inLandmark(nx, me.y) && !inRiver(nx, me.y)) me.x = nx;
       if (ny > PLAYER_R && ny < MAP_H - PLAYER_R && !inLandmark(me.x, ny) && !inRiver(me.x, ny)) me.y = ny;
       me.walkCycle += 0.2;
@@ -937,20 +938,44 @@ function update(dt) {
           if (o.health <= 0) {
             o.alive = false; o.health = 0;
 
-            // Combo system
+            // Streak system
             if (e === me) {
-              comboCount++;
-              comboTimer = gameTime + 3000;
-              const bonus = comboCount > 1 ? comboCount * 25 : 0;
-              e.score += 100 + bonus;
+              // Streak: reset if timed out, else increment
+              if (gameTime > streakTimer) streakCount = 0;
+              streakCount++;
+              streakTimer = gameTime + 3000;
+
+              // Score multiplier: 1.0 at streak 1, up to 3.0
+              const multiplier = Math.min(1 + (streakCount - 1) * 0.25, 3.0);
+              const baseScore = 100;
+              const earnedScore = Math.round(baseScore * multiplier);
+              e.score += earnedScore;
               e.kills++;
 
-              if (comboCount > 1) {
-                comboText.textContent = `🔥 x${comboCount} COMBO! +${bonus}`;
+              // Speed boost for 1.2s
+              streakSpeedUntil = gameTime + 1200;
+
+              // Combo display
+              if (streakCount > 1) {
+                comboText.textContent = `🔥 x${streakCount}  +${earnedScore}`;
                 comboDisplay.style.display = 'block';
                 setTimeout(() => { comboDisplay.style.display = 'none'; }, 1500);
-                hudCombo.style.display = 'block';
-                hudCombo.textContent = `🔥 x${comboCount}`;
+              }
+
+              // Streak HUD badge
+              if (streakCount >= 2) {
+                hudStreak.style.display = 'block';
+                hudStreak.style.opacity = '1';
+                hudStreak.textContent = `🔥 x${streakCount}`;
+              }
+
+              // Voice line based on streak tier
+              if (streakCount >= 6) {
+                playVoice('fury');
+              } else if (streakCount >= 3) {
+                playVoice('streak');
+              } else {
+                playVoice('kill');
               }
             } else {
               e.score += 100;
@@ -1018,6 +1043,13 @@ function update(dt) {
   if (comboTimer > 0 && gameTime > comboTimer) {
     comboCount = 0; comboTimer = 0;
     hudCombo.style.display = 'none';
+  }
+
+  // Streak timeout
+  if (streakCount > 0 && gameTime > streakTimer) {
+    streakCount = 0;
+    hudStreak.style.opacity = '0';
+    setTimeout(() => { hudStreak.style.display = 'none'; }, 400);
   }
 
   // Miss voice: player attacked but hit no one this frame
