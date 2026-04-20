@@ -315,25 +315,31 @@ canvas{display:block;cursor:crosshair}
 <div id="controls-hint-hud">
   <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <span class="hint-label">move</span><br/>
   <kbd>Mouse</kbd> <span class="hint-label">aim</span><br/>
-  <kbd>Click</kbd> <span class="hint-label">slash</span>
+  <kbd>Click</kbd> <span class="hint-label">slash</span><br/>
+  <kbd>Shift</kbd> <span class="hint-label">dash</span><br/>
+  <kbd>P</kbd> <span class="hint-label">pause</span>
 </div>
 
 <!-- MOBILE CONTROLS -->
 <div id="joystick-zone"><div id="joystick-knob"></div></div>
 <div id="attack-btn">🔪</div>
+<div id="dash-btn" style="display:none;position:fixed;bottom:140px;right:30px;width:60px;height:60px;border-radius:50%;background:radial-gradient(circle,rgba(100,180,255,.8),rgba(30,80,200,.8));border:2px solid #4af;color:#fff;font-size:1.4rem;align-items:center;justify-content:center;touch-action:none;user-select:none;z-index:20;box-shadow:0 0 12px rgba(100,180,255,.3)">💨</div>
 
 <script>
 // ========== CONFIG ==========
 const MAP_W = 3200, MAP_H = 3200;
-const PLAYER_SPEED = 3.8;
+const PLAYER_SPEED = 4.2;
 const PLAYER_R = 20;
-const MACHETE_RANGE = 72;
-const MACHETE_ARC = Math.PI * 0.85;
-const ATTACK_CD = 320;
-const ATTACK_DUR = 250;
-const MAX_ITEMS = 55;
-const BOT_COUNT = 12;
-const RESPAWN_MS = 2500;
+const MACHETE_RANGE = 105;
+const MACHETE_ARC = Math.PI * 1.1;
+const ATTACK_CD = 180;
+const ATTACK_DUR = 160;
+const MAX_ITEMS = 65;
+const BOT_COUNT = 18;
+const RESPAWN_MS = 2000;
+const DASH_SPEED = 18;
+const DASH_DURATION = 160;
+const DASH_COOLDOWN = 1100;
 const HEALTH_REGEN = 0.08;
 const PLAYER_ATTACK_DAMAGE = 65;
 const BOT_VS_PLAYER_DAMAGE = 18;
@@ -430,6 +436,9 @@ let streakCount = 0;
 let streakTimer = 0;
 let streakSpeedUntil = 0;
 let lastLowHealthVoice = 0;
+let dashUntil = 0;
+let dashCooldownUntil = 0;
+let dashAngle = 0;
 let gameTime = 0;
 const isMobile = 'ontouchstart' in window;
 
@@ -727,6 +736,7 @@ function startGame() {
   setTimeout(() => playVoice('start'), 300);
   streakCount = 0; streakTimer = 0; streakSpeedUntil = 0;
   lastLowHealthVoice = 0;
+  dashUntil = 0; dashCooldownUntil = 0;
   playing = true;
   joinScreen.style.display = 'none';
   document.getElementById('hud').style.display = 'block';
@@ -768,8 +778,27 @@ addEventListener('keydown', e => {
     case 'a': case 'arrowleft': keys.left = true; break;
     case 'd': case 'arrowright': keys.right = true; break;
     case 'p': case 'escape': togglePause(); break;
+    case 'shift': case ' ':
+      e.preventDefault();
+      triggerDash();
+      break;
   }
 });
+
+function triggerDash() {
+  if (!playing || paused) return;
+  const me = entities[0];
+  if (!me || !me.alive) return;
+  if (gameTime < dashCooldownUntil) return;
+  // dash in current movement direction, or facing angle if standing still
+  let dx = 0, dy = 0;
+  if (keys.up) dy -= 1; if (keys.down) dy += 1;
+  if (keys.left) dx -= 1; if (keys.right) dx += 1;
+  dashAngle = (dx || dy) ? Math.atan2(dy, dx) : me.angle;
+  dashUntil = gameTime + DASH_DURATION;
+  dashCooldownUntil = gameTime + DASH_COOLDOWN;
+  playSfx('slash');
+}
 addEventListener('keyup', e => {
   switch (e.key.toLowerCase()) {
     case 'w': case 'arrowup': keys.up = false; break;
@@ -830,6 +859,10 @@ if (isMobile) {
     addSlashParticle(p.x + Math.cos(p.angle) * 30, p.y + Math.sin(p.angle) * 30, p.angle);
     playSfx('slash');
   });
+
+  const dashBtnEl = document.getElementById('dash-btn');
+  dashBtnEl.style.display = 'flex';
+  dashBtnEl.addEventListener('touchstart', e => { e.preventDefault(); triggerDash(); });
 }
 
 // ========== AD SYSTEM ==========
@@ -868,18 +901,17 @@ function updateBot(bot, now) {
   if (!bot.alive) return;
 
   if (now > bot.retargetAt) {
-    bot.retargetAt = now + rng(1500, 4000);
+    bot.retargetAt = now + rng(600, 1800);
     bot.aggroTarget = null;
 
-    let closest = null, closestDist = 250; // lower aggro range = easier
+    let closest = null, closestDist = 480;
     for (const e of entities) {
       if (e === bot || !e.alive) continue;
       const d = dist(bot, e);
       if (d < closestDist) { closest = e; closestDist = d; }
     }
 
-    // Bots less likely to target the player specifically (easier)
-    if (closest && Math.random() < (closest.isBot ? 0.5 : 0.35)) {
+    if (closest && Math.random() < (closest.isBot ? 0.55 : 0.7)) {
       bot.aggroTarget = closest;
     } else {
       if (Math.random() < 0.5 && items.length > 0) {
@@ -903,7 +935,7 @@ function updateBot(bot, now) {
   const dx = tx - bot.x, dy = ty - bot.y;
   const d = Math.hypot(dx, dy);
   if (d > 5) {
-    const speed = PLAYER_SPEED * (bot.aggroTarget ? 0.85 : 0.6); // bots slower than player
+    const speed = PLAYER_SPEED * (bot.aggroTarget ? 0.95 : 0.65);
     const nx = bot.x + (dx / d) * speed;
     const ny = bot.y + (dy / d) * speed;
     if (nx > PLAYER_R && nx < MAP_W - PLAYER_R && !inLandmark(nx, bot.y) && !inRiver(nx, bot.y)) bot.x = nx;
@@ -942,17 +974,26 @@ function update(dt) {
 
   // Player movement
   if (me && me.alive) {
-    let dx = 0, dy = 0;
-    if (keys.up) dy -= 1; if (keys.down) dy += 1;
-    if (keys.left) dx -= 1; if (keys.right) dx += 1;
-    if (dx || dy) {
-      const len = Math.hypot(dx, dy);
-      const curSpeed = gameTime < streakSpeedUntil ? PLAYER_SPEED * 1.3 : PLAYER_SPEED;
-      const nx = me.x + (dx / len) * curSpeed;
-      const ny = me.y + (dy / len) * curSpeed;
+    const dashing = gameTime < dashUntil;
+    if (dashing) {
+      const nx = me.x + Math.cos(dashAngle) * DASH_SPEED;
+      const ny = me.y + Math.sin(dashAngle) * DASH_SPEED;
       if (nx > PLAYER_R && nx < MAP_W - PLAYER_R && !inLandmark(nx, me.y) && !inRiver(nx, me.y)) me.x = nx;
       if (ny > PLAYER_R && ny < MAP_H - PLAYER_R && !inLandmark(me.x, ny) && !inRiver(me.x, ny)) me.y = ny;
-      me.walkCycle += 0.2;
+      me.walkCycle += 0.4;
+    } else {
+      let dx = 0, dy = 0;
+      if (keys.up) dy -= 1; if (keys.down) dy += 1;
+      if (keys.left) dx -= 1; if (keys.right) dx += 1;
+      if (dx || dy) {
+        const len = Math.hypot(dx, dy);
+        const curSpeed = gameTime < streakSpeedUntil ? PLAYER_SPEED * 1.3 : PLAYER_SPEED;
+        const nx = me.x + (dx / len) * curSpeed;
+        const ny = me.y + (dy / len) * curSpeed;
+        if (nx > PLAYER_R && nx < MAP_W - PLAYER_R && !inLandmark(nx, me.y) && !inRiver(nx, me.y)) me.x = nx;
+        if (ny > PLAYER_R && ny < MAP_H - PLAYER_R && !inLandmark(me.x, ny) && !inRiver(me.x, ny)) me.y = ny;
+        me.walkCycle += 0.2;
+      }
     }
     me.angle = mouseAngle;
   }
@@ -990,11 +1031,15 @@ function update(dt) {
           o.hitFlash = 8;
           if (e === me) e.attackHit = true;
 
-          // Blood splatter on hit — directional
+          // Knockback + blood
           const hitAngle = Math.atan2(o.y - e.y, o.x - e.x);
-          addBloodSplatter(o.x, o.y, hitAngle, 10, 0.8);
-          addParticle(o.x, o.y, '#e63946', 4, 2, 15);
-          screenShake = 5;
+          const kbx = o.x + Math.cos(hitAngle) * 18;
+          const kby = o.y + Math.sin(hitAngle) * 18;
+          if (kbx > PLAYER_R && kbx < MAP_W - PLAYER_R) o.x = kbx;
+          if (kby > PLAYER_R && kby < MAP_H - PLAYER_R) o.y = kby;
+          addBloodSplatter(o.x, o.y, hitAngle, 14, 0.9);
+          addParticle(o.x, o.y, '#e63946', 5, 3, 18);
+          screenShake = 6;
           playSfx('hit');
           if (o === me) playVoice('hurt');
 
@@ -1050,7 +1095,7 @@ function update(dt) {
             addBloodSplatter(o.x, o.y, hitAngle + Math.PI, 12, 1.0);
             addParticle(o.x, o.y, o.outfit.body, 12, 5, 40);
             for (let bp = 0; bp < 3; bp++) addBloodPool(o.x, o.y);
-            screenShake = 10;
+            screenShake = 16;
             playSfx('kill');
 
             const msg = deathMsgFn(e.name, o.name);
