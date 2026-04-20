@@ -413,75 +413,136 @@ const isMobile = 'ontouchstart' in window;
 function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
 addEventListener('resize', resize); resize();
 
-// ========== SOUND (Web Audio) ==========
+// ========== SOUND ==========
 let audioCtx = null;
-function ensureAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); return audioCtx; }
-
-function playSlashSound() {
-  const ctx = ensureAudio();
-  // Short noise burst filtered to sound like a blade swoosh
-  const dur = 0.12;
-  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < data.length; i++) {
-    const t = i / data.length;
-    data[i] = (Math.random() * 2 - 1) * (1 - t) * 0.6;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  const hp = ctx.createBiquadFilter();
-  hp.type = 'highpass'; hp.frequency.value = 800;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 4000;
-  lp.frequency.setValueAtTime(4000, ctx.currentTime);
-  lp.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + dur);
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.5, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + dur);
-  src.connect(hp).connect(lp).connect(gain).connect(ctx.destination);
-  src.start(); src.stop(ctx.currentTime + dur);
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
 }
 
-function playHitSound() {
-  const ctx = ensureAudio();
-  const dur = 0.18;
-  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < data.length; i++) {
-    const t = i / data.length;
-    data[i] = (Math.random() * 2 - 1) * (1 - t * t) * 0.8;
+function playSfx(type) {
+  const ctx = getAudioCtx();
+  if (ctx.state === 'suspended') ctx.resume();
+  const now = ctx.currentTime;
+
+  if (type === 'hit') {
+    const noise = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.12, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.15));
+    noise.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(1800, now);
+    filter.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.7, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.start(now);
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(90, now);
+    thud.frequency.exponentialRampToValueAtTime(30, now + 0.08);
+    const thudGain = ctx.createGain();
+    thudGain.gain.setValueAtTime(0.6, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+    thud.connect(thudGain).connect(ctx.destination);
+    thud.start(now); thud.stop(now + 0.1);
   }
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 1200;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.7, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + dur);
-  src.connect(lp).connect(gain).connect(ctx.destination);
-  src.start(); src.stop(ctx.currentTime + dur);
+
+  if (type === 'slash') {
+    const noise = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.15, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.sin(i / data.length * Math.PI) * 0.4;
+    noise.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(3000, now);
+    filter.frequency.exponentialRampToValueAtTime(800, now + 0.12);
+    filter.Q.value = 2;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.start(now);
+  }
+
+  if (type === 'kill') {
+    playSfx('hit');
+    const crunch = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const t = i / data.length;
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 6) * (1 + Math.sin(t * 400) * 0.3);
+    }
+    crunch.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2400, now);
+    filter.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.5, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+    crunch.connect(filter).connect(gain).connect(ctx.destination);
+    crunch.start(now + 0.03);
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.setValueAtTime(60, now);
+    boom.frequency.exponentialRampToValueAtTime(20, now + 0.18);
+    const boomGain = ctx.createGain();
+    boomGain.gain.setValueAtTime(0.8, now);
+    boomGain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+    boom.connect(boomGain).connect(ctx.destination);
+    boom.start(now); boom.stop(now + 0.22);
+  }
+
+  if (type === 'miss') {
+    const noise = ctx.createBufferSource();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.sin(i / data.length * Math.PI) * 0.25;
+    noise.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 2000;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.start(now);
+  }
 }
 
-function playKillSound() {
-  const ctx = ensureAudio();
-  // Deeper thud + wet crunch
-  const dur = 0.3;
-  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-  const data = buf.getChannelData(0);
-  for (let i = 0; i < data.length; i++) {
-    const t = i / data.length;
-    data[i] = ((Math.random() * 2 - 1) * 0.7 + Math.sin(i / 8) * 0.3) * (1 - t) * 0.9;
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 600;
-  const gain = ctx.createGain();
-  gain.gain.setValueAtTime(0.8, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + dur);
-  src.connect(lp).connect(gain).connect(ctx.destination);
-  src.start(); src.stop(ctx.currentTime + dur);
+const VOICE_LINES = {
+  start:     ['./assets/voice/start-1.mp3','./assets/voice/start-2.mp3','./assets/voice/start-3.mp3'],
+  hurt:      ['./assets/voice/hurt-1.mp3','./assets/voice/hurt-2.mp3','./assets/voice/hurt-3.mp3','./assets/voice/hurt-4.mp3'],
+  kill:      ['./assets/voice/kill-1.mp3','./assets/voice/kill-2.mp3','./assets/voice/kill-3.mp3','./assets/voice/kill-4.mp3','./assets/voice/kill-5.mp3','./assets/voice/kill-6.mp3','./assets/voice/kill-7.mp3','./assets/voice/kill-8.mp3','./assets/voice/kill-9.mp3','./assets/voice/kill-10.mp3'],
+  death:     ['./assets/voice/death-1.mp3','./assets/voice/death-2.mp3','./assets/voice/death-3.mp3'],
+  pickup:    ['./assets/voice/pickup-1.mp3','./assets/voice/pickup-2.mp3'],
+  miss:      ['./assets/voice/miss-1.mp3','./assets/voice/miss-2.mp3','./assets/voice/miss-3.mp3'],
+  streak:    ['./assets/voice/streak-1.mp3','./assets/voice/streak-2.mp3','./assets/voice/streak-3.mp3','./assets/voice/streak-4.mp3','./assets/voice/streak-5.mp3'],
+  fury:      ['./assets/voice/fury-1.mp3','./assets/voice/fury-2.mp3','./assets/voice/fury-3.mp3'],
+  lowhealth: ['./assets/voice/lowhealth-1.mp3','./assets/voice/lowhealth-2.mp3','./assets/voice/lowhealth-3.mp3'],
+  taunt:     ['./assets/voice/taunt-1.mp3','./assets/voice/taunt-2.mp3','./assets/voice/taunt-3.mp3','./assets/voice/taunt-4.mp3','./assets/voice/taunt-5.mp3'],
+};
+
+let currentVoice = null;
+function playVoice(category) {
+  const lines = VOICE_LINES[category];
+  if (!lines || !lines.length) return;
+  const src = lines[Math.floor(Math.random() * lines.length)];
+  if (currentVoice) { currentVoice.pause(); currentVoice.currentTime = 0; }
+  currentVoice = new Audio(src);
+  currentVoice.volume = 0.85;
+  currentVoice.play().catch(() => {});
 }
+
+const music = new Audio('./assets/maczeta-life-theme.mp3');
+music.loop = true;
+music.volume = 0.24;
 
 function rng(a, b) { return a + Math.random() * (b - a); }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -656,7 +717,7 @@ canvas.addEventListener('mousedown', () => {
   if (now - p.lastAttack < ATTACK_CD) return;
   p.attacking = true; p.attackStart = now; p.lastAttack = now;
   addSlashParticle(p.x + Math.cos(p.angle) * 30, p.y + Math.sin(p.angle) * 30, p.angle);
-  playSlashSound();
+  playSfx('slash');
 });
 
 // Prevent right-click menu on canvas
@@ -696,7 +757,7 @@ if (isMobile) {
     if (now - p.lastAttack < ATTACK_CD) return;
     p.attacking = true; p.attackStart = now; p.lastAttack = now;
     addSlashParticle(p.x + Math.cos(p.angle) * 30, p.y + Math.sin(p.angle) * 30, p.angle);
-    playSlashSound();
+    playSfx('slash');
   });
 }
 
@@ -859,7 +920,7 @@ function update(dt) {
           addBloodSplatter(o.x, o.y, hitAngle, 10, 0.8);
           addParticle(o.x, o.y, '#e63946', 4, 2, 15);
           screenShake = 5;
-          playHitSound();
+          playSfx('hit');
 
           if (o.health <= 0) {
             o.alive = false; o.health = 0;
@@ -890,7 +951,7 @@ function update(dt) {
             addParticle(o.x, o.y, o.outfit.body, 12, 5, 40);
             for (let bp = 0; bp < 3; bp++) addBloodPool(o.x, o.y);
             screenShake = 10;
-            playKillSound();
+            playSfx('kill');
 
             const msg = deathMsgFn(e.name, o.name);
             showKill(msg);
