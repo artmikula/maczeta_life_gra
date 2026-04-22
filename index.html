@@ -126,15 +126,6 @@ canvas{display:block;cursor:crosshair}
 .lb-entry{display:flex;justify-content:space-between;padding:4px 2px;font-size:.8rem;border-bottom:1px solid rgba(255,255,255,.08)}
 .lb-entry.me{color:#e63946;font-weight:bold}
 
-/* KILL FEED */
-#kill-feed{display:none;position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none}
-.kill-msg{
-  background:rgba(0,0,0,.85);color:#f4a261;padding:6px 18px;
-  border-radius:20px;margin-top:5px;font-size:.82rem;text-align:center;
-  animation:fadeUp 4s forwards;white-space:nowrap;
-}
-@keyframes fadeUp{0%{opacity:1;transform:translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateY(-30px)}}
-
 /* DEATH SCREEN */
 #death-screen{
   display:none;position:fixed;inset:0;z-index:50;
@@ -285,9 +276,6 @@ canvas{display:block;cursor:crosshair}
   <div id="lb-entries"></div>
 </div>
 
-<!-- KILL FEED -->
-<div id="kill-feed"></div>
-
 <!-- COMBO DISPLAY -->
 <div id="combo-display"><div class="combo-text"></div></div>
 
@@ -330,8 +318,10 @@ canvas{display:block;cursor:crosshair}
 const MAP_W = 3200, MAP_H = 3200;
 const PLAYER_SPEED = 4.2;
 const PLAYER_R = 20;
-const MACHETE_RANGE = 105;
-const MACHETE_ARC = Math.PI * 1.1;
+const MACHETE_RANGE = 130;
+const MACHETE_ARC = Math.PI * 1.4;
+const AIM_ASSIST_CONE = Math.PI * 0.55;
+const AIM_ASSIST_RANGE = 150;
 const ATTACK_CD = 180;
 const ATTACK_DUR = 160;
 const MAX_ITEMS = 65;
@@ -408,6 +398,13 @@ const RIVER = [
   { x:900,y:850,w:500,h:90 },{ x:1350,y:800,w:400,h:90 },
   { x:1700,y:750,w:500,h:90 },{ x:2150,y:700,w:400,h:90 },
   { x:2500,y:650,w:700,h:90 },
+];
+
+// Bridges: walkable crossings over the river
+const BRIDGES = [
+  { x:380, y:925, w:70, h:140, name:'Most Grunwaldzki' },
+  { x:1450, y:775, w:70, h:140, name:'Most Dębnicki' },
+  { x:2700, y:625, w:70, h:140, name:'Most Kotlarski' },
 ];
 
 // Decorative trees
@@ -597,10 +594,29 @@ function playVoice(category) {
 
 const music = new Audio('./assets/maczeta-life-theme.mp3');
 music.loop = true;
-music.volume = 0.24;
+music.volume = 0.15;
 
 function rng(a, b) { return a + Math.random() * (b - a); }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+// Aim assist: snap attack angle to nearest enemy within a cone around current aim
+function aimAssistAngle(p, baseAngle) {
+  let best = null, bestScore = -1;
+  for (const o of entities) {
+    if (o === p || !o.alive) continue;
+    const dx = o.x - p.x, dy = o.y - p.y;
+    const d = Math.hypot(dx, dy);
+    if (d > AIM_ASSIST_RANGE + PLAYER_R) continue;
+    const a = Math.atan2(dy, dx);
+    let ad = a - baseAngle;
+    while (ad > Math.PI) ad -= Math.PI * 2;
+    while (ad < -Math.PI) ad += Math.PI * 2;
+    if (Math.abs(ad) > AIM_ASSIST_CONE) continue;
+    const score = (1 - d / (AIM_ASSIST_RANGE + PLAYER_R)) * 1.5 + (1 - Math.abs(ad) / AIM_ASSIST_CONE);
+    if (score > bestScore) { bestScore = score; best = a; }
+  }
+  return best !== null ? best : baseAngle;
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function shadeColor(hex, amt) {
@@ -615,9 +631,18 @@ function inLandmark(x, y) {
   return false;
 }
 
+function onBridge(x, y) {
+  for (const b of BRIDGES) {
+    if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) return true;
+  }
+  return false;
+}
+
 function inRiver(x, y) {
   for (const r of RIVER) {
-    if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) return true;
+    if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) {
+      return !onBridge(x, y);
+    }
   }
   return false;
 }
@@ -643,7 +668,7 @@ function makeEntity(name, isBot) {
     vx: 0, vy: 0,
     score: 0, health: 100, kills: 0, alive: true,
     outfit: OUTFITS[Math.floor(Math.random() * OUTFITS.length)],
-    attacking: false, attackStart: 0, lastAttack: 0, attackHit: false,
+    attacking: false, attackStart: 0, attackAngle: 0, lastAttack: 0, attackHit: false,
     lastHit: 0, // for health regen delay
     hitFlash: 0,
     targetX: p.x, targetY: p.y, retargetAt: 0, aggroTarget: null,
@@ -741,7 +766,6 @@ function startGame() {
   joinScreen.style.display = 'none';
   document.getElementById('hud').style.display = 'block';
   document.getElementById('leaderboard').style.display = 'block';
-  document.getElementById('kill-feed').style.display = 'block';
   if (!isMobile) document.getElementById('controls-hint-hud').style.display = 'block';
   document.getElementById('pause-btn').style.display = 'block';
   // Show bottom ad banner when playing
@@ -815,8 +839,9 @@ canvas.addEventListener('mousedown', () => {
   if (!playing || !entities[0] || !entities[0].alive) return;
   const p = entities[0], now = gameTime;
   if (now - p.lastAttack < ATTACK_CD) return;
+  p.attackAngle = aimAssistAngle(p, mouseAngle);
   p.attacking = true; p.attackStart = now; p.lastAttack = now;
-  addSlashParticle(p.x + Math.cos(p.angle) * 30, p.y + Math.sin(p.angle) * 30, p.angle);
+  addSlashParticle(p.x + Math.cos(p.attackAngle) * 30, p.y + Math.sin(p.attackAngle) * 30, p.attackAngle);
   playSfx('slash');
 });
 
@@ -855,8 +880,9 @@ if (isMobile) {
     if (!playing || !entities[0] || !entities[0].alive) return;
     const p = entities[0], now = gameTime;
     if (now - p.lastAttack < ATTACK_CD) return;
+    p.attackAngle = aimAssistAngle(p, mouseAngle);
     p.attacking = true; p.attackStart = now; p.lastAttack = now;
-    addSlashParticle(p.x + Math.cos(p.angle) * 30, p.y + Math.sin(p.angle) * 30, p.angle);
+    addSlashParticle(p.x + Math.cos(p.attackAngle) * 30, p.y + Math.sin(p.attackAngle) * 30, p.attackAngle);
     playSfx('slash');
   });
 
@@ -947,25 +973,17 @@ function updateBot(bot, now) {
   if (bot.aggroTarget && bot.aggroTarget.alive) {
     const ad = dist(bot, bot.aggroTarget);
     if (ad < MACHETE_RANGE + PLAYER_R && now - bot.lastAttack >= ATTACK_CD + rng(0, 200)) {
-      bot.attacking = true; bot.attackStart = now; bot.lastAttack = now;
+      bot.attackAngle = bot.angle; bot.attacking = true; bot.attackStart = now; bot.lastAttack = now;
     }
   }
 }
 
 // ========== GAME LOOP ==========
-const killFeedEl = document.getElementById('kill-feed');
 const deathScreen = document.getElementById('death-screen');
 const deathMsgEl = document.getElementById('death-msg');
 const comboDisplay = document.getElementById('combo-display');
 const comboText = comboDisplay.querySelector('.combo-text');
 const hudStreak = document.getElementById('hud-streak');
-
-function showKill(msg) {
-  const div = document.createElement('div');
-  div.className = 'kill-msg'; div.textContent = msg;
-  killFeedEl.appendChild(div);
-  setTimeout(() => div.remove(), 4000);
-}
 
 function update(dt) {
   if (!playing || paused) return;
@@ -1021,7 +1039,7 @@ function update(dt) {
         if (o === e || !o.alive) continue;
         if (dist(e, o) > MACHETE_RANGE + PLAYER_R) continue;
         const aToT = Math.atan2(o.y - e.y, o.x - e.x);
-        let ad = aToT - e.angle;
+        let ad = aToT - e.attackAngle;
         while (ad > Math.PI) ad -= Math.PI * 2;
         while (ad < -Math.PI) ad += Math.PI * 2;
         if (Math.abs(ad) < MACHETE_ARC / 2) {
@@ -1098,12 +1116,9 @@ function update(dt) {
             screenShake = 16;
             playSfx('kill');
 
-            const msg = deathMsgFn(e.name, o.name);
-            showKill(msg);
-
             if (o === me) {
               deathScreen.style.display = 'flex';
-              deathMsgEl.textContent = msg;
+              deathMsgEl.textContent = deathMsgFn(e.name, o.name);
               playVoice('death');
               streakCount = 0; streakTimer = 0; streakSpeedUntil = 0;
               hudStreak.style.opacity = '0';
@@ -1270,6 +1285,38 @@ function drawGround() {
     for (let wx = 10; wx < r.w; wx += 32) {
       const wy = Math.sin(riverTime * 1.4 + wx * 0.07 + 1) * 3;
       ctx.fillRect(rx + wx, ry + r.h * 0.3 + wy, 10, 1.5);
+    }
+  }
+
+  // Bridges (planks with railings, drawn over river)
+  for (const b of BRIDGES) {
+    const bx = b.x - camera.x, by = b.y - camera.y;
+    if (bx + b.w < -10 || bx > canvas.width + 10 || by + b.h < -10 || by > canvas.height + 10) continue;
+    // Shadow under bridge
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(bx - 2, by + 6, b.w + 4, b.h);
+    // Deck base
+    ctx.fillStyle = '#7a5a38';
+    ctx.fillRect(bx, by, b.w, b.h);
+    // Plank highlights
+    ctx.fillStyle = '#8e6b44';
+    for (let py = 6; py < b.h - 4; py += 12) {
+      ctx.fillRect(bx + 2, by + py, b.w - 4, 8);
+    }
+    // Plank gaps
+    ctx.fillStyle = 'rgba(40,25,10,0.6)';
+    for (let py = 14; py < b.h; py += 12) {
+      ctx.fillRect(bx + 2, by + py, b.w - 4, 1);
+    }
+    // Side railings
+    ctx.fillStyle = '#5a3e22';
+    ctx.fillRect(bx - 3, by, 5, b.h);
+    ctx.fillRect(bx + b.w - 2, by, 5, b.h);
+    // Railing posts
+    ctx.fillStyle = '#3a2614';
+    for (let py = 6; py < b.h; py += 20) {
+      ctx.fillRect(bx - 4, by + py, 7, 4);
+      ctx.fillRect(bx + b.w - 3, by + py, 7, 4);
     }
   }
 
@@ -1661,10 +1708,10 @@ function drawEntity(p) {
     const progress = (gameTime - p.attackStart) / ATTACK_DUR;
     const arcAlpha = 1 - progress;
     ctx.beginPath();
-    ctx.arc(sx, sy, MACHETE_RANGE + 5, p.angle - MACHETE_ARC / 2, p.angle + MACHETE_ARC / 2);
+    ctx.arc(sx, sy, MACHETE_RANGE + 5, p.attackAngle - MACHETE_ARC / 2, p.attackAngle + MACHETE_ARC / 2);
     ctx.strokeStyle = `rgba(255,255,255,${arcAlpha * 0.5})`; ctx.lineWidth = 3; ctx.stroke();
     ctx.beginPath();
-    ctx.arc(sx, sy, MACHETE_RANGE - 10, p.angle - MACHETE_ARC / 2 + progress * 0.3, p.angle + MACHETE_ARC / 2 - progress * 0.3);
+    ctx.arc(sx, sy, MACHETE_RANGE - 10, p.attackAngle - MACHETE_ARC / 2 + progress * 0.3, p.attackAngle + MACHETE_ARC / 2 - progress * 0.3);
     ctx.strokeStyle = `rgba(230,57,70,${arcAlpha * 0.4})`; ctx.lineWidth = 2; ctx.stroke();
   }
 
@@ -1754,6 +1801,10 @@ function drawMinimap() {
   // River
   ctx.fillStyle = '#1565a0';
   for (const r of RIVER) ctx.fillRect(mx + r.x * s, my + r.y * s, r.w * s, r.h * s);
+
+  // Bridges
+  ctx.fillStyle = '#c49a6c';
+  for (const b of BRIDGES) ctx.fillRect(mx + b.x * s, my + b.y * s, Math.max(b.w * s, 2), Math.max(b.h * s, 2));
 
   // Landmarks
   for (const lm of LANDMARKS) {
